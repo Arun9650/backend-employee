@@ -1,13 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const { Pool } = require('pg');
 const app = express();
+const fs = require('fs');
 const port = 3000;
+
 
 
 // Middleware
 app.use(express.json());
+
+app.use(express.static('uploads'));
 
 // Set up PostgreSQL connection
 const pool = new Pool({
@@ -50,19 +55,66 @@ app.get('/api/departments', (req, res) => {
     });
   });
 
-// Add Employee
-app.post('/api/employees', async (req, res) => {
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/temp'); //temporary folder
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname); // timestamp for uniqueness
+  }
+});
+
+const upload = multer({ storage: storage });
+
+
+// Add Employee with Image Upload (saving image in temp folder first)
+app.post('/api/employees', upload.single('pancard_image'), async (req, res) => {
   const { name, department_id, address } = req.body;
+  const pancard_image = req.file ? req.file.path : null;
+
   try {
-    const result = await pool.query(
-      'INSERT INTO employees (name, department_id, address) VALUES ($1, $2, $3) RETURNING *',
-      [name, department_id, address]
-    );
-    res.json(result.rows[0]);
+    if (!pancard_image) {
+      return res.status(400).json({ error: "Pancard image is required" });
+    }
+
+    const tempImagePath = pancard_image;
+    const permanentImagePath = `uploads/${req.file.filename}`;
+
+    // Move the file from temp to permanent location
+    fs.rename(tempImagePath, permanentImagePath, async (err) => {
+      if (err) {
+        return res.status(500).json({ error: "Error moving the file" });
+      }
+
+      // Insert employee data with image path
+      try {
+        const result = await pool.query(
+          'INSERT INTO employees (name, department_id, address, pancard_image) VALUES ($1, $2, $3, $4) RETURNING *',
+          [name, department_id, address, permanentImagePath]
+        );
+
+
+          // remove the temp image
+          fs.unlink(tempImagePath, (err) => {
+            if (err) {
+              console.error('Error removing temp file:', err);
+            } else {
+              console.log('Temp file removed:', tempImagePath);
+            }
+          });
+
+
+        res.json(result.rows[0]);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Get Employees with Filter
 // Get Filtered Employees with Department Details
